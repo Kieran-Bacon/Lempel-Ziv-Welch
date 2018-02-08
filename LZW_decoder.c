@@ -2,209 +2,104 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Dictionary structure to hold code -> value pairs. Performance would be inproved by using a hash
-map. Codes are represented through the indexes of the array */
-typedef struct {
-    char **array;
-    unsigned int used; // The number of codes currently used
-    unsigned int size; // The capacity of the structure.
-} Dictionary;
+#include "Dictionary.h"
 
-/* Essentially a constructor for the dictionary structure */
-Dictionary *initialiseDictionary(){
-
-    // Allocate 512 slots for the code-value pairs
-    char **array = (char**)malloc(512*sizeof(char**));
-
-    // Poulate the first 256 slots with the ascii values 
-    for(int i = 0; i < 256; i++){
-        char *snippet = (char*)malloc(2*sizeof(char));
-        snippet[0] = (char) i;
-        snippet[1] = '\0';
-        array[i] = snippet;
-    }
-
-    // Create a dictionary structure and populate it with its information
-    Dictionary *initialised = (Dictionary *)malloc(sizeof(Dictionary));
-    initialised->array = array;
-    initialised->size = 512;
-    initialised->used = 256;
-
-    return initialised;
-}
-
-/* Deconstruct a dictionary */
-void destructDictionary(Dictionary *target){
-    for(int i = 0; i< target->used; i++){
-        free(target->array[i]);
-    }
-    free(target);
-}
-
-/* Define a new code within a dictionary */
-Dictionary *define(Dictionary *dict, unsigned int codeOne, unsigned int codeTwo){
-
-    // Ensure space within the dictionary
-    if( dict->used == dict->size ){
-
-        if(dict->size == 4096){
-            // All available codes have been used up for 12 bits. Reinitialise the dictionary
-            Dictionary *newDictionary = initialiseDictionary();
-            Dictionary *temp = dict;
-            dict = newDictionary;
-            destructDictionary(temp);
-        }
-        else{
-            // Double the capacity of the dictionary
-            dict->array = (char**)realloc(dict->array, 2*dict->size*sizeof(char**));
-            dict->size *= 2;
-        }
-    }
-
-    // Generate a new value: value of code One + first character of code 2 + null
-    char *snippet = (char *)malloc((strlen(dict->array[codeOne]) + 2)*sizeof(char));
-    strcpy(snippet, dict->array[codeOne]);
-    snippet[strlen(dict->array[codeOne])] = dict->array[codeTwo][0];
-    snippet[strlen(dict->array[codeOne])+1] = '\0';
-
-    // insert the snippet into the dictionary and return
-    dict->array[dict->used++] = snippet;
-    return dict;
-}
-
-
-
-/* Collect 3 bytes from a target file in a precise location and split them into two 12 bit codes.
-
-Params:
-    - address: target file address
-    - position: The starting position of the head
+unsigned int *readByte(FILE* input){
     
-Returns:
-    unsigned int*: An array of two codes extracted from the file.
-*/
-unsigned int * nextBytes(int position, char *address){
-
-    unsigned char buffer[3];
-    unsigned int *codes = (unsigned int *)malloc(2*sizeof(unsigned int));
-
-    FILE *filehandler = fopen(address, "rb");
-    if (filehandler == NULL){
-        printf("Error opening file!\n");
+    if(input == NULL){
+        printf("Cannot read bytes for file\n");
         exit(1);
     }
-    fseek(filehandler, position*3, SEEK_SET);
-    fread(buffer, 1, 3, filehandler);
-    fclose(filehandler);
-    
+
+    unsigned char buffer[3] = {0,0,0};
+    unsigned int* codes = (unsigned int*)malloc(2*sizeof(unsigned int));
+
+    fread(buffer,1, 3, input);
+
+    if(feof(input)){
+
+        codes[0] = (buffer[0]<<8) | (buffer[1]);
+        codes[1] = 0;
+        
+        return codes;
+    }
+
     codes[0] = (buffer[0]<<4) | (buffer[1]>>4);
     codes[1] = (buffer[1] ^ (buffer[1]>>4)<<4)<<8 | buffer[2];
 
     return codes;
 }
 
-/* Extract a code from position assuming that the code comprises of 16 bits */
-unsigned int collectEnd(int position, char *address){
-    unsigned char buffer[2];
-
-    FILE *filehandler = fopen(address, "rb");
-    if (filehandler == NULL){
-        printf("Error opening file!\n");
-        exit(1);
-    }
-    fseek(filehandler, position*3, SEEK_SET);
-    fread(buffer, 1, 2, filehandler);
-    fclose(filehandler);
-
-    unsigned int code = (buffer[0]<<8) | (buffer[1]);
-    return code;
-}
-
-/* Write a string to file */
-void output(char* address, char* snippet){
-    FILE *filehandler = fopen(address, "a");
-    if (filehandler == NULL){
-        printf("Error opening file!\n");
-        exit(1);
-    }
-    fprintf(filehandler, "%s", snippet);
-    fclose(filehandler);
-}
-
-/* Collect the number of bytes within a file */
-long fileSize(const char* filename)
-{
-    long size;
-    FILE *filehandler = fopen(filename, "rb");
-    if (filehandler == NULL){
-        printf("Error opening file!\n");
-        exit(1);
-    }
-    fseek(filehandler, 0, SEEK_END);
-    size = ftell(filehandler);
-    fclose(filehandler);
- 
-    return size;
-}
-
 int main(int argc, char **argv){
 
-    char* inputFile; char* outputFile;
+    char* inputFileName; char* outputFileName;
     // Ensure collection of target + set output file destination
     if(argc<2){
         printf("Please pass path to target file.\n");
         exit(0);
     } else {
-        inputFile = argv[1];
-        outputFile = (char*)malloc((strlen(inputFile)+5)*sizeof(char*));
-        strcpy(outputFile, inputFile);
-        strcat(outputFile,".txt");
+        inputFileName = argv[1];
+        outputFileName = (char*)malloc((strlen(inputFileName)+5)*sizeof(char*));
+        strcpy(outputFileName, inputFileName);
+        strcat(outputFileName,".txt");
     }
 
-    // Generate variables;
+    // Define variables
+    FILE* inputStream; FILE* outputStream;
+    unsigned int* codes;
+    unsigned int code; unsigned int previous;
+
     Dictionary* lexicon = initialiseDictionary();
-    long filelength = fileSize(inputFile);
 
-    // Access file and extract initial codes
-    unsigned int* codes = nextBytes(0, inputFile);
-    unsigned int code;
-    unsigned int previous = codes[1];
+    inputStream = fopen(inputFileName,"rb");
+    outputStream = fopen(outputFileName,"w");
 
-    // Generate the first new code
-    lexicon = define(lexicon, codes[0], codes[1]);
+    codes = readByte(inputStream);
+    lexicon = defineDictionaryCode(lexicon, codes[0], codes[1]);
+    fprintf(outputStream,"%s", (char*) lexicon->array[codes[0]]);
+    fprintf(outputStream,"%s", lexicon->array[codes[1]]);
 
-    // Output the code's values to output file 
-    output(outputFile, lexicon->array[codes[0]]);
-    output(outputFile, lexicon->array[codes[1]]);
+    previous = codes[1];
 
-    // Iterate over remaining document
-    int i;
-    for(i = 1; i*3<=filelength; i++){
+    while(1){
 
-        // Collect two new codes from file
-        codes = nextBytes(i, inputFile);
+        // Collect the next codes
+        codes = readByte(inputStream);
 
-        for(int j = 0; j < 2; j++ ){
-
-            code = codes[j];
-            if(code >= lexicon->used){
-                code = previous; // Code not in dictionary therefore select previous word.
+        // if the end of file has been reached the second code will be equal to 0
+        if(codes[1] == 0){
+            if(codes[0] != 0){
+                // If a possible code was formed output it
+                fprintf(outputStream,"%s", lexicon->array[codes[0]]);
             }
-            
-            lexicon = define(lexicon, previous, code);     // Define a new code
-            output(outputFile, lexicon->array[code]);      // Write to output
-            previous = code;                               // Set code as previous
+            free(codes);
+            break;
         }
+        
+        // Process the codes
+        for(int i = 0; i<2; i++){
+
+            code = codes[i];
+            if(code >= lexicon->used){
+                // Code is not defined implying it is to be the previous code
+                code = previous;
+            }
+
+            // Define the previous and new code combination
+            lexicon = defineDictionaryCode(lexicon, previous, code);
+
+            // Output the code to the output file
+            fprintf(outputStream,"%s", lexicon->array[code]);
+
+            previous = code;
+        }
+
+        free(codes);
     }
 
-    if(filelength != (i-1)*3){
-        // Odd sized file -> Two remaining bytes to form a final code
-        output(outputFile, lexicon->array[collectEnd(i, inputFile)]);
-    }
-
-    free(outputFile);
-    free(codes);
+    fclose(inputStream); fclose(outputStream);
     destructDictionary(lexicon);
+    free(outputFileName);
 
-    return 0;
+    exit(0);
 }
